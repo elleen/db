@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Interactive mysql connector. Entries live in ~/.config/db/dbs.conf (managed by `db-add`).
+# Format: alias|host|port|user|default_db|password[|tunnel_cmd]
+# tunnel_cmd (optional) is run in the background before connecting and stopped on exit.
+set -euo pipefail
+
+CONF="${DB_CONF:-$HOME/.config/db/dbs.conf}"
+[[ -s "$CONF" ]] || { echo "No entries in $CONF. Run db-add first." >&2; exit 1; }
+
+names=(); lines=()
+while IFS= read -r line; do
+  [[ -z "$line" || "$line" == \#* ]] && continue
+  lines+=("$line"); names+=("${line%%|*}")
+done < "$CONF"
+
+echo "Which database?"
+for i in "${!names[@]}"; do
+  IFS='|' read -r _ host port _ _ _ _ <<< "${lines[$i]}"
+  printf "  %d) %-20s %s:%s\n" $((i+1)) "${names[$i]}" "$host" "$port"
+done
+read -rp "Choose [1-${#names[@]}]: " choice
+[[ "$choice" =~ ^[0-9]+$ && "$choice" -ge 1 && "$choice" -le ${#names[@]} ]] || { echo "Invalid choice" >&2; exit 1; }
+
+IFS='|' read -r _ host port user default_db password tunnel <<< "${lines[$((choice-1))]}"
+port="${port:-3306}"
+read -rp "Which table/schema? [${default_db}]: " schema
+schema="${schema:-$default_db}"
+
+if [[ -n "$tunnel" ]]; then
+  # Free the local port, then open the tunnel in the background.
+  pids="$(lsof -ti "tcp:$port" -sTCP:LISTEN || true)"
+  if [[ -n "$pids" ]]; then
+    echo "Killing process(es) on port $port: $pids"
+    kill $pids || true
+    sleep 1
+  fi
+  log="$(mktemp -t db-tunnel)"
+  bash -c "$tunnel" > "$log" 2>&1 &
+  tunnel_pid=$!
+  trap 'kill "$tunnel_pid" 2>/dev/null || true' EXIT
+  echo "Starting tunnel (log: $log)..."
+  for _ in $(seq 1 30); do
+    lsof -ti "tcp:$port" -sTCP:LISTEN > /dev/null && break
+    kill -0 "$tunnel_pid" 2>/dev/null || { echo "Tunnel exited:" >&2; cat "$log" >&2; exit 1; }
+    sleep 1
+  done
+  lsof -ti "tcp:$port" -sTCP:LISTEN > /dev/null || { echo "Tunnel not listening on $port after 30s" >&2; exit 1; }
+fi
+
+echo "Connecting to $host:$port/$schema as $user..."
+MYSQL_PWD="$password" mysql -h "$host" -P "$port" -u "$user" "$schema"

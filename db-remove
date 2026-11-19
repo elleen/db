@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Remove an entry from ~/.config/db/dbs.conf used by `db`.
+# Usage: db-remove [ALIAS]   (prompts with a numbered list when ALIAS is omitted)
+set -euo pipefail
+
+CONF="${DB_CONF:-$HOME/.config/db/dbs.conf}"
+[[ -s "$CONF" ]] || { echo "No entries in $CONF." >&2; exit 1; }
+
+names=(); lines=()
+while IFS= read -r line; do
+  [[ -z "$line" || "$line" == \#* ]] && continue
+  lines+=("$line"); names+=("${line%%|*}")
+done < "$CONF"
+
+name="${1:-}"
+if [[ -z "$name" ]]; then
+  echo "Which database to remove?"
+  for i in "${!names[@]}"; do
+    IFS='|' read -r _ host port _ _ _ _ <<< "${lines[$i]}"
+    printf "  %d) %-20s %s:%s\n" $((i+1)) "${names[$i]}" "$host" "$port"
+  done
+  read -rp "Choose [1-${#names[@]}]: " choice
+  [[ "$choice" =~ ^[0-9]+$ && "$choice" -ge 1 && "$choice" -le ${#names[@]} ]] || { echo "Invalid choice" >&2; exit 1; }
+  name="${names[$((choice-1))]}"
+fi
+
+printf '%s\n' "${names[@]}" | grep -qx -- "$name" || { echo "No entry named '$name'" >&2; exit 1; }
+
+tmp="$(mktemp)"
+grep -v "^${name}|" "$CONF" > "$tmp" || true
+cat "$tmp" > "$CONF"; rm -f "$tmp"
+echo "Removed '$name' from $CONF"

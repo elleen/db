@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Add (or replace) an entry in ~/.config/db/dbs.conf used by `db`.
+# Usage: db-add mysql -h HOST [-P PORT] -u USER [-pPASSWORD] [--tunnel=CMD] [DATABASE]
+set -euo pipefail
+
+CONF="${DB_CONF:-$HOME/.config/db/dbs.conf}"
+mkdir -p "$(dirname "$CONF")"; touch "$CONF"; chmod 600 "$CONF"
+
+[[ $# -gt 0 ]] || { echo "usage: db-add mysql -h HOST [-P PORT] -u USER [-pPASSWORD] [DATABASE]" >&2; exit 1; }
+[[ "$1" == "mysql" ]] && shift
+
+host=""; port="3306"; user=""; dbname=""; password=""; tunnel=""; ask_pw=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--host)       host="$2"; shift 2 ;;
+    --host=*)        host="${1#*=}"; shift ;;
+    -h?*)            host="${1#-h}"; shift ;;
+    -P|--port)       port="$2"; shift 2 ;;
+    --port=*)        port="${1#*=}"; shift ;;
+    -P?*)            port="${1#-P}"; shift ;;
+    -u|--user)       user="$2"; shift 2 ;;
+    --user=*)        user="${1#*=}"; shift ;;
+    -u?*)            user="${1#-u}"; shift ;;
+    -D|--database)   dbname="$2"; shift 2 ;;
+    --database=*)    dbname="${1#*=}"; shift ;;
+    --tunnel)        tunnel="$2"; shift 2 ;;
+    --tunnel=*)      tunnel="${1#*=}"; shift ;;
+    --password=*)    password="${1#*=}"; shift ;;
+    -p|--password)   ask_pw=1; shift ;;
+    -p?*)            password="${1#-p}"; shift ;;
+    -*)              shift ;;
+    *)               dbname="$1"; shift ;;
+  esac
+done
+
+[[ -n "$host" && -n "$user" ]] || { echo "host (-h) and user (-u) are required" >&2; exit 1; }
+if [[ -z "$password" && $ask_pw -eq 1 ]]; then
+  read -rsp "Password: " password; echo
+fi
+
+read -rp "Alias: " name
+[[ -n "$name" ]] || { echo "alias is required" >&2; exit 1; }
+[[ "$name$host$user$dbname$tunnel" != *"|"* ]] || { echo "'|' not allowed in fields" >&2; exit 1; }
+
+# Drop any existing entry with the same alias, then append
+tmp="$(mktemp)"
+grep -v "^${name}|" "$CONF" > "$tmp" || true
+printf '%s|%s|%s|%s|%s|%s|%s\n' "$name" "$host" "$port" "$user" "$dbname" "$password" "$tunnel" >> "$tmp"
+cat "$tmp" > "$CONF"; rm -f "$tmp"
+echo "Saved '$name' to $CONF"
